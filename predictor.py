@@ -14,7 +14,7 @@ import traceback
 # --- Configuration ---
 ARTIFACTS_DIR = "./"
 GNN_MODEL_PATH = os.path.join(ARTIFACTS_DIR, 'best_gnn_for_embeddings_model.pth')
-XGB_MODEL_PATH = os.path.join(ARTIFACTS_DIR, 'xgb_model_final.joblib')
+XGB_MODEL_PATH = os.path.join(ARTIFACTS_DIR, 'xgb_model_final.json')
 SCALER_GNN_PATH = os.path.join(ARTIFACTS_DIR, 'scaler_gnn.joblib')
 USER_LE_PATH = os.path.join(ARTIFACTS_DIR, 'user_le_gnn.joblib')
 MERCHANT_LE_PATH = os.path.join(ARTIFACTS_DIR, 'merchant_le_gnn.joblib')
@@ -26,9 +26,10 @@ OPTIMAL_THRESHOLD_XGB_LOAD_PATH = os.path.join(ARTIFACTS_DIR, 'optimal_threshold
 GNN_HIDDEN_CHANNELS = 64
 GNN_OUT_CHANNELS_EMB = GNN_HIDDEN_CHANNELS
 GNN_CLASSIFICATION_OUT_CHANNELS = 2
-GNN_NUM_LAYERS = 2
-GNN_GAT_HEADS = 2
+GNN_NUM_LAYERS = 2             # <--- Ensure this is an integer
+GNN_GAT_HEADS = 2              # <--- Ensure this is an integer
 GNN_DROPOUT_RATE_TRAINING = 0.3
+# ... (rest of config) .
 
 ALL_TX_NUMERIC_FEATS_GNN = ['Amount', 'Hour', 'DayOfWeek', 'Month_Derived',
                             'TimeSinceLastTxUser_log_seconds', 'UserTxCumulativeCount',
@@ -116,50 +117,61 @@ class HeteroGNN_GAT_For_Embeddings(torch.nn.Module):
             elif 'transaction' in x_dict_transformed and x_dict_transformed['transaction'] is not None: num_tx_nodes_output = x_dict_transformed['transaction'].shape[0]
             return {'transaction': torch.empty(num_tx_nodes_output, self.emb_projection_lin.out_features, device=self.emb_projection_lin.weight.device)}
 
-
 def load_artifacts():
     global gnn_model_loaded, xgb_model_loaded, scaler_gnn_loaded, user_le_loaded, \
            merchant_le_loaded, cat_le_dict_loaded, optimal_threshold_loaded, user_to_cards_map_loaded
+    
     print("Loading artifacts for predictor...")
     artifacts_ok = True
-    try:
-        if os.path.exists(USER_TO_CARDS_MAPPING_PATH):
-            user_to_cards_map_loaded = joblib.load(USER_TO_CARDS_MAPPING_PATH)
-            print(f"   User-Card mapping loaded. Contains {len(user_to_cards_map_loaded)} users.")
-        else: print(f"CRITICAL WARNING: User-Card map NOT FOUND. Card validation will be skipped."); user_to_cards_map_loaded = {}; # No longer sets artifacts_ok to False, predict_fraud handles it
-    except Exception as e: print(f"Error loading User-Card map: {e}"); user_to_cards_map_loaded = {}
+    # ... (loading user_to_cards_map, user_le, merchant_le) ...
     try:
         if os.path.exists(USER_LE_PATH): user_le_loaded = joblib.load(USER_LE_PATH); print("   User LE loaded.")
-        else: print(f"CRITICAL WARNING: User LE NOT FOUND."); user_le_loaded = None; artifacts_ok = False
+        else: print(f"CRITICAL WARNING: User LE NOT FOUND at {USER_LE_PATH}"); user_le_loaded = None; artifacts_ok = False
     except Exception as e: print(f"Error loading User LE: {e}"); user_le_loaded = None; artifacts_ok = False
     try:
         if os.path.exists(MERCHANT_LE_PATH): merchant_le_loaded = joblib.load(MERCHANT_LE_PATH); print("   Merchant LE loaded.")
-        else: print(f"CRITICAL WARNING: Merchant LE NOT FOUND."); merchant_le_loaded = None; artifacts_ok = False
+        else: print(f"CRITICAL WARNING: Merchant LE NOT FOUND at {MERCHANT_LE_PATH}"); merchant_le_loaded = None; artifacts_ok = False
     except Exception as e: print(f"Error loading Merchant LE: {e}"); merchant_le_loaded = None; artifacts_ok = False
-    
+
     num_users_at_training_time = len(user_le_loaded.classes_) if user_le_loaded and hasattr(user_le_loaded, 'classes_') else 1
     num_merchants_at_training_time = len(merchant_le_loaded.classes_) if merchant_le_loaded and hasattr(merchant_le_loaded, 'classes_') else 1
     num_gnn_input_features_after_le = len(ALL_TX_NUMERIC_FEATS_GNN) + len(TX_CATEGORICAL_FEATS_GNN)
 
     try:
-        gnn_model_loaded = HeteroGNN_GAT_For_Embeddings( GNN_HIDDEN_CHANNELS, GNN_OUT_CHANNELS_EMB, GNN_CLASSIFICATION_OUT_CHANNELS, num_users_at_training_time, num_merchants_at_training_time, num_gnn_input_features_after_le, GNN_DROPOUT_RATE_TRAINING, GNN_NUM_LAYERS, GNN_GAT_HEADS).to(device)
-        if os.path.exists(GNN_MODEL_PATH): gnn_model_loaded.load_state_dict(torch.load(GNN_MODEL_PATH, map_location=device)); gnn_model_loaded.eval(); print("   GNN model loaded and set to eval mode.")
-        else: print(f"   CRITICAL ERROR: GNN model file NOT FOUND."); artifacts_ok = False
+        gnn_model_loaded = HeteroGNN_GAT_For_Embeddings(
+            hidden_channels=GNN_HIDDEN_CHANNELS,
+            emb_out_channels=GNN_OUT_CHANNELS_EMB,
+            classification_out_channels=GNN_CLASSIFICATION_OUT_CHANNELS,
+            num_users_for_embedding=num_users_at_training_time,
+            num_merchants_for_embedding=num_merchants_at_training_time,
+            num_tx_node_features=num_gnn_input_features_after_le,
+            dropout_rate=GNN_DROPOUT_RATE_TRAINING,
+            num_gnn_layers=int(GNN_NUM_LAYERS),         # MODIFIED: Explicitly cast to int
+            gat_heads=int(GNN_GAT_HEADS)                # MODIFIED: Explicitly cast to int
+        ).to(device)
+        # ... (rest of GNN loading and other artifact loading) ...
+        if os.path.exists(GNN_MODEL_PATH):
+            gnn_model_loaded.load_state_dict(torch.load(GNN_MODEL_PATH, map_location=device))
+            gnn_model_loaded.eval()
+            print("   GNN model loaded and set to eval mode.")
+        else: print(f"   CRITICAL ERROR: GNN model file NOT FOUND at {GNN_MODEL_PATH}"); artifacts_ok = False
     except Exception as e: print(f"Error loading GNN model: {e}"); traceback.print_exc(); gnn_model_loaded = None; artifacts_ok = False
+
+    # ... (load XGB, scaler, cat_le_dict, optimal_threshold as before) ...
+    # ... (ensure artifacts_ok is set appropriately if any critical load fails) ...
     try:
         if os.path.exists(XGB_MODEL_PATH): xgb_model_loaded = joblib.load(XGB_MODEL_PATH); print("   XGBoost model loaded.")
-        else: print(f"   CRITICAL ERROR: XGBoost model file NOT FOUND."); artifacts_ok = False
+        else: print(f"   CRITICAL ERROR: XGBoost model file NOT FOUND at {XGB_MODEL_PATH}"); artifacts_ok = False
     except Exception as e: print(f"Error loading XGB model: {e}"); xgb_model_loaded = None; artifacts_ok = False
     try:
         if os.path.exists(SCALER_GNN_PATH): scaler_gnn_loaded = joblib.load(SCALER_GNN_PATH); print("   GNN Scaler loaded.")
-        else: print(f"   CRITICAL WARNING: GNN Scaler NOT FOUND."); artifacts_ok = False
+        else: print(f"   CRITICAL WARNING: GNN Scaler NOT FOUND at {SCALER_GNN_PATH}"); artifacts_ok = False
     except Exception as e: print(f"Error loading Scaler: {e}"); scaler_gnn_loaded = None; artifacts_ok = False
     try:
         if os.path.exists(CAT_LE_DICT_PATH): cat_le_dict_loaded = joblib.load(CAT_LE_DICT_PATH); print("   Categorical LE dict loaded.")
-        else: print(f"   CRITICAL WARNING: Categorical LE dict NOT FOUND."); artifacts_ok = False
+        else: print(f"   CRITICAL WARNING: Categorical LE dict NOT FOUND at {CAT_LE_DICT_PATH}"); artifacts_ok = False
     except Exception as e: print(f"Error loading Cat LE dict: {e}"); cat_le_dict_loaded = None; artifacts_ok = False
     
-    # MODIFIED: Load optimal threshold from file
     if os.path.exists(OPTIMAL_THRESHOLD_XGB_LOAD_PATH):
         try:
             with open(OPTIMAL_THRESHOLD_XGB_LOAD_PATH, 'r') as f:
@@ -168,14 +180,9 @@ def load_artifacts():
         except Exception as e_thresh:
             print(f"   WARNING: Could not read optimal threshold file. Using default 0.5. Error: {e_thresh}")
             optimal_threshold_loaded = 0.5
-            # artifacts_ok = False # Decided not to make this critical for loading, predict_fraud will use default
     else:
         print(f"   WARNING: Optimal threshold file NOT FOUND at {OPTIMAL_THRESHOLD_XGB_LOAD_PATH}. Using default 0.5.")
         optimal_threshold_loaded = 0.5
-            
-    if not artifacts_ok: print("CRITICAL: One or more essential artifacts failed to load. Predictions may be unreliable or fail.")
-    print("Artifact loading attempt complete.")
-    return artifacts_ok
 
 # ... (preprocess_transaction_for_gnn - no changes from last version) ...
 def preprocess_transaction_for_gnn(transaction_data_dict_raw):
