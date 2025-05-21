@@ -10,11 +10,11 @@ import traceback
 st.set_page_config(page_title="Fraud Detection App", page_icon="🛡️", layout="wide")
 
 # --- Load Artifacts ---
-@st.cache_resource # Cache the loading process
+@st.cache_resource
 def load_all_artifacts_streamlit():
     st.info("Loading model artifacts... This may take a moment on first run or after app updates.")
     try:
-        success = predictor.load_artifacts() # This now returns a boolean
+        success = predictor.load_artifacts()
         if success:
             st.success("Model artifacts loaded successfully!")
         else:
@@ -22,8 +22,7 @@ def load_all_artifacts_streamlit():
         return success
     except Exception as e:
         st.error(f"Critical error during artifact loading in Streamlit: {e}")
-        st.error("The application might not be able to make predictions.")
-        traceback.print_exc() # Print to console where Streamlit is run
+        traceback.print_exc()
         return False
 
 artifacts_loaded_successfully = load_all_artifacts_streamlit()
@@ -38,22 +37,17 @@ if not artifacts_loaded_successfully:
 
 st.sidebar.header("Transaction Input")
 with st.sidebar.form(key='transaction_input_form'):
-    # Attempt to provide sensible defaults, ideally from loaded LEs
-    default_user_st = "0"
-    default_card_st = "card_A_for_user_0" # Example card for user '0'
+    default_user_st = "0" # Fallback default
+    default_card_st = "card_A_for_user_0"
     default_merchant_st = "12345"
     default_mcc_st = "5411"
 
-    # Use actual known values if available from loaded LabelEncoders for better demo
     if predictor.user_le_loaded and hasattr(predictor.user_le_loaded, 'classes_') and len(predictor.user_le_loaded.classes_) > 0:
         default_user_st = predictor.user_le_loaded.classes_[0]
         if predictor.user_to_cards_map_loaded and default_user_st in predictor.user_to_cards_map_loaded and predictor.user_to_cards_map_loaded[default_user_st]:
-            # Ensure the set is not empty before trying to access an element
             card_set_for_default_user = predictor.user_to_cards_map_loaded[default_user_st]
-            if card_set_for_default_user: # Check if the set is not empty
-                 default_card_st = list(card_set_for_default_user)[0]
-            else: # User exists in map, but has no cards listed (edge case)
-                 default_card_st = "card_placeholder_for_user_with_no_cards"
+            if card_set_for_default_user: default_card_st = list(card_set_for_default_user)[0]
+            else: default_card_st = "card_placeholder_no_cards_st" # Different placeholder
     
     if predictor.merchant_le_loaded and hasattr(predictor.merchant_le_loaded, 'classes_') and len(predictor.merchant_le_loaded.classes_) > 0:
         default_merchant_st = predictor.merchant_le_loaded.classes_[0]
@@ -64,21 +58,21 @@ with st.sidebar.form(key='transaction_input_form'):
     card_id = st.text_input("Card ID/Number", value=default_card_st)
     st.markdown("---")
     col1_st, col2_st, col3_st = st.columns(3)
-    current_time_st = pd.Timestamp.now() # Use a different variable name
+    current_time_st = pd.Timestamp.now()
     with col1_st: year = st.number_input("Year", 2000, 2050, current_time_st.year, format="%d")
     with col2_st: month = st.number_input("Month", 1, 12, current_time_st.month, format="%d")
     with col3_st: day = st.number_input("Day", 1, 31, current_time_st.day, format="%d")
     transaction_time_str = st.text_input("Time (HH:MM:SS)", value=current_time_st.strftime("%H:%M:%S"))
     amount_str = st.text_input("Amount (e.g., $123.45 or 123.45)", value="$75.50")
     st.markdown("---")
-    use_chip_options = ["Chip Transaction", "Online Transaction", "Swipe Transaction"]
+    use_chip_options = ["Chip Transaction", "Online Transaction", "Swipe Transaction"] # Ensure these match your LE
     use_chip = st.selectbox("Transaction Type", use_chip_options, index=0)
     merchant_name_input = st.text_input("Merchant Name/ID", value=default_merchant_st)
     mcc = st.text_input("MCC", value=default_mcc_st)
     merchant_city = st.text_input("Merchant City", value="NEW YORK")
     merchant_state = st.text_input("Merchant State", value="NY")
     zip_code = st.text_input("Zip Code", value="10001")
-    errors_options = ["No Error", "Technical Glitch", "Bad PIN", "Insufficient Balance", "Bad CVV", "Bad Card Number", "Bad Expiration"]
+    errors_options = ["No Error", "Technical Glitch", "Bad PIN", "Insufficient Balance", "Bad CVV", "Bad Card Number", "Bad Expiration"] # Ensure these match
     errors = st.selectbox("Errors?", errors_options, index=0)
     submit_button = st.form_submit_button(label='🔍 Predict Fraud')
 
@@ -95,26 +89,23 @@ if submit_button:
         st.markdown("**Input Sent to Predictor:**")
         st.json({k: v for k,v in transaction_data_dict.items() if k != 'TransactionID'})
 
-        # Predictor now always returns a tuple (response_dict, status_code)
         response_data, status_code = predictor.predict_fraud(transaction_data_dict)
         
         st.subheader("Prediction Result")
         if "error" in response_data:
             st.error(f"🚫 Error (Status Code {status_code}): {response_data['error']}")
             if "details" in response_data: st.caption(f"Details: {response_data['details']}")
-            if "user_provided" in response_data: # Specific for card validation error
+            if "user_provided" in response_data:
                 st.warning(f"Input User: {response_data.get('user_provided', 'N/A')}, Input Card: {response_data.get('card_provided', 'N/A')}")
-        else: # Success case
+        else:
             fraud_score = response_data.get("fraud_score", 0.0)
             is_fraud = response_data.get("is_fraud_prediction", 0)
             threshold = response_data.get("threshold_used", 0.5)
             card_status = response_data.get("card_validation_status", "Status_Unknown")
 
             st.info(f"Card Validation Status: {card_status}")
-            if is_fraud == 1:
-                st.error(f"🚨 POTENTIALLY FRAUDULENT (Score: {fraud_score:.4f})")
-            else:
-                st.success(f"✅ LIKELY NOT FRAUDULENT (Score: {fraud_score:.4f})")
+            if is_fraud == 1: st.error(f"🚨 POTENTIALLY FRAUDULENT (Score: {fraud_score:.4f})")
+            else: st.success(f"✅ LIKELY NOT FRAUDULENT (Score: {fraud_score:.4f})")
             st.metric(label="Fraud Score", value=f"{fraud_score:.4f}", delta=f"Threshold: {threshold:.4f}")
 
 st.sidebar.markdown("---")
